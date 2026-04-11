@@ -1,3 +1,5 @@
+import os
+from openai import OpenAI
 from environment import MiniGameEnv
 from grader import grade_easy, grade_medium, grade_hard
 from models import Action
@@ -7,19 +9,42 @@ def run_agent(difficulty: str, seed: int = 42):
     env = MiniGameEnv(difficulty=difficulty)
     obs = env.reset(seed=seed)
     
+    client = OpenAI(
+        base_url=os.environ["API_BASE_URL"],
+        api_key=os.environ["API_KEY"]
+    )
+    
     done = False
     
     while not done:
         agent_x, agent_y = obs.agent_position
         goal_x, goal_y = obs.goal_position
         
-        # Simple blind baseline: move right then down
-        if agent_x < goal_x:
-            action = Action(direction="right")
-        elif agent_y < goal_y:
-            action = Action(direction="down")
-        else:
-            break # Reached or some issue
+        if agent_x == goal_x and agent_y == goal_y:
+            break
+            
+        # Ask LLM for next move
+        prompt = f"Agent is at ({agent_x}, {agent_y}). Goal is at ({goal_x}, {goal_y}). What direction should the agent move? Respond only with one of: left, right, up, down."
+        
+        try:
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=10
+            )
+            move = response.choices[0].message.content.strip().lower()
+            if "right" in move: move = "right"
+            elif "down" in move: move = "down"
+            elif "left" in move: move = "left"
+            elif "up" in move: move = "up"
+            else:
+                move = "right" if agent_x < goal_x else "down"
+        except Exception as e:
+            print(f"LLM call failed: {e}", flush=True)
+            move = "right" if agent_x < goal_x else "down"
+            
+        action = Action(direction=move)
             
         obs, reward, done, _ = env.step(action)
         print(f"[STEP] step={env.steps_taken} reward={reward}", flush=True)
